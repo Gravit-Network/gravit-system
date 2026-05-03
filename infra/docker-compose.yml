@@ -1,0 +1,93 @@
+version: '3.8'
+
+services:
+  # API Gateway
+  api:
+    build:
+      context: ../services/api
+      dockerfile: ../../infra/docker/Dockerfile.api
+    ports:
+      - "8000:8000"
+    environment:
+      - GENERATOR_URL=http://generator:8001
+      - VALIDATOR_URL=http://validator:8002
+      - CONSENSUS_URL=http://consensus:8003
+      - HISTORY_URL=http://history:8004
+      - EQL_URL=http://eql:8005
+    depends_on:
+      - generator
+      - validator
+      - consensus
+      - history
+      - eql
+
+  # LLM Generator Service
+  generator:
+    build:
+      context: ../services/generator
+      dockerfile: ../../infra/docker/Dockerfile.generator
+    ports:
+      - "8001:8001"
+    environment:
+      - XAI_API_KEY=${XAI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      - generator_data:/data
+
+  # PoR Validator Service
+  validator:
+    build:
+      context: ../services/validator
+      dockerfile: ../../infra/docker/Dockerfile.validator
+    ports:
+      - "8002:8002"
+    depends_on:
+      - consensus
+
+  # GQRVP Consensus Engine
+  consensus:
+    build:
+      context: ../services/consensus
+      dockerfile: ../../infra/docker/Dockerfile.consensus
+    ports:
+      - "8003:8003"
+    environment:
+      - GTC_API_URL=https://raw.githubusercontent.com/Gravit-Network/gravit-truth-consensus
+    volumes:
+      - consensus_data:/data
+
+  # History Keeper
+  history:
+    build:
+      context: ../services/history
+      dockerfile: ../../infra/docker/Dockerfile.history
+    ports:
+      - "8004:8004"
+    volumes:
+      - history_data:/data/db
+
+  # EQL Query Engine
+  eql:
+    build:
+      context: ../services/eql
+      dockerfile: ../../infra/docker/Dockerfile.eql
+    ports:
+      - "8005:8005"
+    depends_on:
+      - history
+
+  # Frontend UI
+  ui:
+    build:
+      context: ../ui
+      dockerfile: ../infra/docker/Dockerfile.ui
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  generator_data:
+  consensus_data:
+  history_data:

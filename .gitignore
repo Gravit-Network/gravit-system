@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.env
+*.log
+*.pid
+
+# Docker
+*.dockerignore
+
+# IDE
+.vscode/
+.idea/
+
+# Data
+/data/
+*.db
+
+# Secrets
+.env
+.env.local
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Node (for UI)
+node_modules/
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
