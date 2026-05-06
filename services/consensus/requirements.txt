@@ -1,5 +1,5 @@
-numpy>=1.21.0
-scipy>=1.7.0
+fastapi==0.104.1
+uvicorn==0.24.0
+numpy==1.24.3
+scipy==1.11.4
 gravit-truth-consensus @ git+https://github.com/Gravit-Network/gravit-truth-consensus
-fastapi>=0.95.0
-uvicorn>=0.21.0

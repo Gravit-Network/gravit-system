@@ -1,18 +1,20 @@
 """
-API Gateway for Gravit System
+API Gateway for Gravit Open Network
+
+Routes requests to appropriate microservices.
 """
+
+import httpx
+from typing import Optional
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
-import httpx
-import uuid
-from datetime import datetime
 
-app = FastAPI(title="Gravit Open Network API", version="1.0.0")
 
-# CORS for UI
+app = FastAPI(title="Gravit API Gateway", version="1.0.0")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,12 +23,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Service URLs (from environment or defaults)
-GENERATOR_URL = "http://generator:8001"
-VALIDATOR_URL = "http://validator:8002"
-CONSENSUS_URL = "http://consensus:8003"
-HISTORY_URL = "http://history:8004"
-EQL_URL = "http://eql:8005"
+SERVICE_URLS = {
+    "generator": "http://generator:8001",
+    "validator": "http://validator:8002",
+    "consensus": "http://consensus:8003",
+    "history": "http://history:8004",
+    "eql": "http://eql:8005",
+}
 
 
 class GenerateRequest(BaseModel):
@@ -35,17 +38,9 @@ class GenerateRequest(BaseModel):
     max_tokens: int = 500
 
 
-class GenerateResponse(BaseModel):
-    hypothesis_id: str
-    hypothesis: str
-    confidence: float
-    provenance: str
-    timestamp: datetime
-
-
 class ValidateRequest(BaseModel):
     hypothesis_id: str
-    evidence: List[Dict[str, Any]]
+    evidence: list
 
 
 class ConsensusRequest(BaseModel):
@@ -53,112 +48,114 @@ class ConsensusRequest(BaseModel):
     rounds: int = 100
 
 
-class EQLQuery(BaseModel):
+class EQLQueryRequest(BaseModel):
     eql: str
 
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "services": SERVICE_URLS
+    }
 
 
-@app.post("/v1/generate", response_model=GenerateResponse)
+@app.post("/v1/generate")
 async def generate_hypothesis(request: GenerateRequest):
-    """Generate a hypothesis using an LLM."""
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{GENERATOR_URL}/generate",
-            json=request.dict()
-        )
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="Generator failed")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            response = await client.post(
+                f"{SERVICE_URLS['generator']}/generate",
+                json=request.dict()
+            )
+            response.raise_for_status()
+            result = response.json()
 
-        result = response.json()
+            await client.post(
+                f"{SERVICE_URLS['history']}/api/v1/store",
+                json={
+                    "hypothesis_id": result.get("hypothesis_id"),
+                    "agent": request.llm,
+                    "hypothesis": result.get("hypothesis"),
+                    "confidence": result.get("confidence"),
+                    "metadata": {"prompt": request.prompt}
+                }
+            )
 
-    return GenerateResponse(
-        hypothesis_id=str(uuid.uuid4()),
-        hypothesis=result["hypothesis"],
-        confidence=result["confidence"],
-        provenance=request.llm,
-        timestamp=datetime.now()
-    )
+            return result
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=503, detail=f"Generator service unavailable: {str(e)}")
 
 
 @app.post("/v1/validate")
 async def validate_hypothesis(request: ValidateRequest):
-    """Validate a hypothesis with PoR."""
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{VALIDATOR_URL}/validate",
-            json=request.dict()
-        )
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="Validation failed")
-
-        result = response.json()
-
-    # Store in history
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"{HISTORY_URL}/store",
-            json={
-                "hypothesis_id": request.hypothesis_id,
-                "validation": result,
-                "timestamp": datetime.now().isoformat()
-            }
-        )
-
-    return result
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            response = await client.post(
+                f"{SERVICE_URLS['validator']}/validate",
+                json=request.dict()
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=503, detail=f"Validator service unavailable: {str(e)}")
 
 
 @app.post("/v1/consensus")
 async def run_consensus(request: ConsensusRequest):
-    """Run GQRVP consensus on a hypothesis."""
-    # Retrieve hypothesis from history
-    async with httpx.AsyncClient() as client:
-        history_response = await client.get(f"{HISTORY_URL}/get/{request.hypothesis_id}")
-        if history_response.status_code != 200:
-            raise HTTPException(status_code=404, detail="Hypothesis not found")
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            history_response = await client.get(
+                f"{SERVICE_URLS['history']}/api/v1/history"
+            )
+            history_response.raise_for_status()
+            history = history_response.json()
 
-        hypothesis_data = history_response.json()
+            hypothesis_data = None
+            for item in history.get("results", []):
+                if item.get("hypothesis_id") == request.hypothesis_id:
+                    hypothesis_data = item
+                    break
 
-    # Run consensus
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{CONSENSUS_URL}/run",
-            json={
-                "hypothesis": hypothesis_data,
-                "rounds": request.rounds
-            }
-        )
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="Consensus failed")
+            if not hypothesis_data:
+                raise HTTPException(status_code=404, detail="Hypothesis not found")
 
-        result = response.json()
+            consensus_response = await client.post(
+                f"{SERVICE_URLS['consensus']}/api/v1/consensus",
+                json={
+                    "hypothesis_id": request.hypothesis_id,
+                    "hypotheses": [hypothesis_data],
+                    "n_agents": 100,
+                    "n_hypotheses": 2,
+                    "max_iterations": request.rounds
+                }
+            )
+            consensus_response.raise_for_status()
+            consensus_result = consensus_response.json()
 
-    # Update history with consensus result
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"{HISTORY_URL}/update",
-            json={
+            return {
                 "hypothesis_id": request.hypothesis_id,
-                "consensus": result,
-                "timestamp": datetime.now().isoformat()
+                "consensus": consensus_result
             }
-        )
-
-    return result
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=503, detail=f"Consensus service unavailable: {str(e)}")
 
 
 @app.post("/v1/query")
-async def eql_query(query: EQLQuery):
-    """Execute an EQL query."""
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{EQL_URL}/query",
-            json=query.dict()
-        )
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="Query failed")
+async def eql_query(request: EQLQueryRequest):
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            response = await client.post(
+                f"{SERVICE_URLS['eql']}/api/v1/query",
+                json=request.dict()
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=503, detail=f"EQL service unavailable: {str(e)}")
 
-        return response.json()
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

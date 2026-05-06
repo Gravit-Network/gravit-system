@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  api:
+    restart: always
+    environment:
+      - ENVIRONMENT=production
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  consensus:
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+
+  history:
+    restart: always
+    volumes:
+      - history_prod_data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+
+  generator:
+    restart: always
+    deploy:
+      replicas: 2
+
+  validator:
+    restart: always
+    deploy:
+      replicas: 2
+
+  eql:
+    restart: always
+
+  ui:
+    restart: always
+    deploy:
+      replicas: 2
+
+volumes:
+  history_prod_data:
+    external: true
