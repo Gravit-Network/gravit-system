@@ -10,7 +10,7 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from services.eql.parser import EQLParser, EQLExecutor, EQLSyntaxError
+from parser import EQLParser, EQLExecutor, EQLSyntaxError
 
 
 app = FastAPI(title="EQL Service", version="1.0.0")

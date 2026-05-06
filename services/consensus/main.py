@@ -24,6 +24,19 @@ except ImportError:
 app = FastAPI(title="Consensus Service", version="1.0.0")
 
 
+def _create_fallback_erdos_renyi_graph(n_agents: int, p: float = 0.3) -> np.ndarray:
+    """
+    Build a row-stochastic adjacency matrix for fallback consensus updates.
+    """
+    # Random adjacency with self loops to avoid isolated zero rows.
+    adjacency = (np.random.rand(n_agents, n_agents) < p).astype(float)
+    np.fill_diagonal(adjacency, 1.0)
+
+    row_sums = adjacency.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0.0] = 1.0
+    return adjacency / row_sums
+
+
 class ConsensusRequest(BaseModel):
     hypothesis_id: str
     hypotheses: List[Dict[str, Any]] = Field(default_factory=list)
@@ -126,7 +139,10 @@ async def run_consensus_endpoint(request: ConsensusRequest):
 
     try:
         signals = _hypotheses_to_signals(request.hypotheses, request.n_agents, request.n_hypotheses)
-        graph = create_erdos_renyi_graph(request.n_agents, p=0.3)
+        if GTC_AVAILABLE:
+            graph = create_erdos_renyi_graph(request.n_agents, p=0.3)
+        else:
+            graph = _create_fallback_erdos_renyi_graph(request.n_agents, p=0.3)
 
         if GTC_AVAILABLE:
             result = run_consensus(
